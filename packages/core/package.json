@@ -1,0 +1,76 @@
+{
+    "name": "@page-steer/core",
+    "private": false,
+    "version": "0.9.0",
+    "type": "module",
+    "main": "./src/PageSteerCore.ts",
+    "types": "./src/PageSteerCore.ts",
+    "exports": {
+        ".": {
+            "types": "./src/PageSteerCore.ts",
+            "default": "./src/PageSteerCore.ts"
+        },
+        "./skill-store": {
+            "types": "./src/SkillStore.ts",
+            "default": "./src/SkillStore.ts"
+        }
+    },
+    "publishConfig": {
+        "main": "./dist/esm/page-steer-core.js",
+        "module": "./dist/esm/page-steer-core.js",
+        "types": "./dist/esm/PageSteerCore.d.ts",
+        "exports": {
+            ".": {
+                "types": "./dist/esm/PageSteerCore.d.ts",
+                "import": "./dist/esm/page-steer-core.js",
+                "default": "./dist/esm/page-steer-core.js"
+            },
+            "./skill-store": {
+                "types": "./dist/esm/SkillStore.d.ts",
+                "import": "./dist/esm/SkillStore.js",
+                "default": "./dist/esm/SkillStore.js"
+            }
+        }
+    },
+    "files": [
+        "dist/"
+    ],
+    "description": "AI-Powered Browser Assistant - add intelligent automation to any webpage with a single script",
+    "keywords": [
+        "ai",
+        "automation",
+        "ui-agent",
+        "GUI-agent",
+        "browser-automation",
+        "web-agent",
+        "llm",
+        "dom-interaction",
+        "web-automation",
+        "GUI-simulation"
+    ],
+    "author": "CookieBody",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/cookiebody/PageSteer.git"
+    },
+    "homepage": "https://cookiebody.github.io/docs/page-steer/",
+    "scripts": {
+        "build": "vite build",
+        "test": "vitest run",
+        "dev:iife": "concurrently \"vite build --config vite.iife.config.js --watch\" \"npx serve dist/iife -p 5174\"",
+        "prepublishOnly": "node ../../scripts/pre-publish.js",
+        "postpublish": "node ../../scripts/post-publish.js"
+    },
+    "dependencies": {
+        "chalk": "^5.6.2",
+        "@page-steer/llms": "0.9.0",
+        "@page-steer/page-controller": "0.9.0"
+    },
+    "peerDependencies": {
+        "zod": "^3.25.0 || ^4.0.0"
+    },
+    "devDependencies": {
+        "zod": "^4.4.3"
+    }
+}

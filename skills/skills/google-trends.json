@@ -1,0 +1,215 @@
+{
+    "meta": {
+        "id": "google-trends",
+        "name": "Google Trends",
+        "version": "1.0.0",
+        "description": "Browse trending searches, explore keyword interest over time, compare terms, and discover related queries on Google Trends.",
+        "author": "page-steer",
+        "icon": "📈",
+        "source": "community",
+        "matchPatterns": ["^https?://trends\\.google\\.com"],
+        "tags": ["google", "trends", "seo", "research", "keywords"],
+        "actions": [
+            {
+                "name": "get_trending_now",
+                "description": "Get currently trending searches from the Trending Now page (navigate to trends.google.com/trending first)",
+                "params": {}
+            },
+            {
+                "name": "get_trending_detail",
+                "description": "Expand a trending item to see related articles and details",
+                "params": {
+                    "index": {
+                        "type": "number",
+                        "description": "Trending item index (0-based)",
+                        "required": true
+                    }
+                }
+            },
+            {
+                "name": "search_explore",
+                "description": "Search a keyword on the Explore page to see interest over time",
+                "params": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search keyword to explore",
+                        "required": true
+                    }
+                }
+            },
+            {
+                "name": "compare_terms",
+                "description": "Compare up to 5 search terms on the Explore page",
+                "params": {
+                    "terms": {
+                        "type": "string",
+                        "description": "Comma-separated terms to compare (max 5)",
+                        "required": true
+                    }
+                }
+            },
+            {
+                "name": "get_interest_data",
+                "description": "Extract interest over time and regional interest data from the current Explore page",
+                "params": {}
+            },
+            {
+                "name": "get_related_queries",
+                "description": "Get related queries (Top and Rising) from the current Explore page",
+                "params": {}
+            },
+            {
+                "name": "get_related_topics",
+                "description": "Get related topics from the current Explore page",
+                "params": {}
+            },
+            {
+                "name": "set_region",
+                "description": "Change the geographic region for trend data",
+                "params": {
+                    "geo": {
+                        "type": "string",
+                        "description": "Region code (e.g. US, GB, JP, CN, empty for worldwide)",
+                        "required": true
+                    }
+                }
+            },
+            {
+                "name": "set_time_range",
+                "description": "Change the time range for trend data",
+                "params": {
+                    "range": {
+                        "type": "string",
+                        "description": "Time range: now 1-H, now 4-H, now 1-d, now 7-d, today 1-m, today 3-m, today 12-m, today 5-y",
+                        "required": true
+                    }
+                }
+            }
+        ]
+    },
+    "recipe": {
+        "steps": [],
+        "actionSteps": {
+            "get_trending_now": [
+                {
+                    "type": "extract",
+                    "selector": "table[role=\"grid\"]",
+                    "fallbackSelectors": [
+                        "[aria-label=\"Trending Now\"]",
+                        "[class*=\"enOdEe-wZVHld\"]",
+                        "main table"
+                    ],
+                    "description": "Extract the full trending searches table content"
+                }
+            ],
+            "get_trending_detail": [
+                {
+                    "type": "click",
+                    "selector": "table[role=\"grid\"] tbody tr:nth-of-type({{index}}) button",
+                    "fallbackSelectors": [
+                        "table[role=\"grid\"] tr:nth-of-type({{index}}) [aria-expanded]",
+                        "table[role=\"grid\"] tr:nth-of-type({{index}}) [role=\"button\"]"
+                    ],
+                    "isParam": true,
+                    "description": "Expand the trending item row"
+                },
+                {
+                    "type": "wait",
+                    "selector": "",
+                    "waitMs": 500,
+                    "description": "Wait for detail panel to load"
+                },
+                {
+                    "type": "extract",
+                    "selector": "table[role=\"grid\"] tbody tr:nth-of-type({{index}})",
+                    "fallbackSelectors": ["[aria-expanded=\"true\"] ~ *"],
+                    "isParam": true,
+                    "description": "Extract expanded detail content"
+                }
+            ],
+            "search_explore": [
+                {
+                    "type": "navigate",
+                    "selector": "",
+                    "value": "https://trends.google.com/trends/explore?q={{query}}",
+                    "isParam": true,
+                    "description": "Navigate to Explore page for the keyword"
+                },
+                {
+                    "type": "wait",
+                    "selector": "",
+                    "waitMs": 3000,
+                    "description": "Wait for Explore page to load charts"
+                }
+            ],
+            "compare_terms": [
+                {
+                    "type": "navigate",
+                    "selector": "",
+                    "value": "https://trends.google.com/trends/explore?q={{terms}}",
+                    "isParam": true,
+                    "description": "Navigate to Explore page with multiple comma-separated terms"
+                },
+                {
+                    "type": "wait",
+                    "selector": "",
+                    "waitMs": 3000,
+                    "description": "Wait for comparison charts to load"
+                }
+            ],
+            "get_interest_data": [
+                {
+                    "type": "extract",
+                    "selector": "[class*=\"widget\"]",
+                    "fallbackSelectors": ["[id*=\"widget\"]", "main", "[role=\"main\"]"],
+                    "description": "Extract interest over time chart and regional interest data"
+                }
+            ],
+            "get_related_queries": [
+                {
+                    "type": "extract",
+                    "selector": "[class*=\"related-queries\"]",
+                    "fallbackSelectors": [
+                        "a[href*=\"/trends/explore?q=\"]",
+                        "[class*=\"fe-related\"]",
+                        "[class*=\"widget\"]:last-of-type"
+                    ],
+                    "description": "Extract related queries section (Top and Rising)"
+                }
+            ],
+            "get_related_topics": [
+                {
+                    "type": "extract",
+                    "selector": "[class*=\"related-topics\"]",
+                    "fallbackSelectors": ["[class*=\"fe-related\"]", "[class*=\"widget\"]"],
+                    "description": "Extract related topics section"
+                }
+            ],
+            "set_region": [
+                {
+                    "type": "navigate",
+                    "selector": "",
+                    "value": "{{current_url_with_geo}}",
+                    "isParam": true,
+                    "description": "Update URL geo parameter to change region (agent constructs URL with ?geo={{geo}})"
+                }
+            ],
+            "set_time_range": [
+                {
+                    "type": "navigate",
+                    "selector": "",
+                    "value": "{{current_url_with_date}}",
+                    "isParam": true,
+                    "description": "Update URL date parameter to change time range (agent constructs URL with &date={{range}})"
+                }
+            ]
+        },
+        "confidence": 0.35,
+        "successCount": 0,
+        "failCount": 0
+    },
+    "sourceUrl": "https://raw.githubusercontent.com/cookiebody/PageSteer/main/skills/skills/google-trends.json",
+    "hash": "a1b2c3d4",
+    "downloads": 0,
+    "rating": 0
+}

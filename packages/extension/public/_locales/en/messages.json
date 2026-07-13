@@ -1,0 +1,11 @@
+{
+    "extName": {
+        "message": "Page Steer"
+    },
+    "extDescription": {
+        "message": "AI-Powered Browser Assistant"
+    },
+    "extActionTitle": {
+        "message": "Open Page Steer"
+    }
+}

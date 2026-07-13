@@ -1,0 +1,137 @@
+{
+    "name": "root",
+    "private": true,
+    "version": "0.9.0",
+    "type": "module",
+    "workspaces": [
+        "packages/page-controller",
+        "packages/ui",
+        "packages/llms",
+        "packages/core",
+        "packages/page-steer",
+        "packages/mcp",
+        "packages/extension",
+        "packages/website"
+    ],
+    "description": "AI-powered UI agent for web applications",
+    "author": "CookieBody",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/cookiebody/PageSteer.git"
+    },
+    "homepage": "https://cookiebody.github.io/docs/page-steer/",
+    "engines": {
+        "node": "^22.22.1 || >=24",
+        "npm": "^11.6.3"
+    },
+    "scripts": {
+        "start": "npm run dev --workspace=@page-steer/website",
+        "dev:ext": "npm run dev -w @page-steer/ext",
+        "dev:demo": "npm run dev:demo --workspace=page-steer",
+        "build": "node scripts/build.js",
+        "build:libs": "node scripts/build-libs.js",
+        "build:website": "npm run build:website --workspace=@page-steer/website",
+        "build:ext": "npm run zip -w @page-steer/ext",
+        "version": "node scripts/sync-version.js",
+        "postpublish": "npm run postpublish --workspaces --if-present",
+        "typecheck": "tsc --noEmit -p tsconfig.typecheck.json && tsc --noEmit -p packages/extension/tsconfig.json",
+        "test": "npm test --workspaces --if-present",
+        "lint": "eslint .",
+        "ci": "node scripts/ci.js",
+        "cleanup": "rm -rf packages/*/dist && rm -rf packages/*/.output",
+        "prepare": "husky || true"
+    },
+    "devDependencies": {
+        "@commitlint/cli": "^21.0.1",
+        "@commitlint/config-conventional": "^21.0.1",
+        "@eslint-react/eslint-plugin": "^5.8.16",
+        "@eslint/js": "^10.0.1",
+        "@microsoft/api-extractor": "^7.58.8",
+        "@tailwindcss/vite": "^4.3.0",
+        "@trivago/prettier-plugin-sort-imports": "^6.0.2",
+        "@types/node": "^25.9.2",
+        "@vitejs/plugin-react": "^6.0.2",
+        "chalk": "^5.6.2",
+        "concurrently": "^10.0.3",
+        "dotenv": "^17.4.2",
+        "eslint": "^10.4.0",
+        "globals": "^17.6.0",
+        "husky": "^9.1.7",
+        "lint-staged": "^17.0.5",
+        "prettier": "^3.8.3",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.61.0",
+        "unplugin-dts": "^1.0.1",
+        "vite": "^8.0.14",
+        "vite-plugin-css-injected-by-js": "^5.0.1",
+        "vitest": "^4.1.8"
+    },
+    "overrides": {
+        "typescript": "^6.0.3",
+        "node-notifier": {
+            "uuid": "11.1.1"
+        },
+        "web-ext-run": {
+            "tmp": "0.2.7"
+        }
+    },
+    "lint-staged": {
+        "*.{js,ts,cjs,cts,mjs,mts}": [
+            "npx prettier --write --ignore-unknown",
+            "npx eslint --quiet"
+        ],
+        "*.{jsx,tsx}": [
+            "npx prettier --write --ignore-unknown",
+            "npx eslint --quiet"
+        ],
+        "*.css": [
+            "npx prettier --write --ignore-unknown"
+        ]
+    },
+    "commitlint": {
+        "extends": [
+            "@commitlint/config-conventional"
+        ],
+        "rules": {
+            "subject-case": [
+                0,
+                "never"
+            ]
+        }
+    },
+    "prettier": {
+        "singleQuote": true,
+        "semi": false,
+        "useTabs": true,
+        "printWidth": 100,
+        "trailingComma": "es5",
+        "plugins": [
+            "@trivago/prettier-plugin-sort-imports"
+        ],
+        "importOrder": [
+            "<THIRD_PARTY_MODULES>",
+            "^(@/).*(?<!css)$",
+            "^[./].*(?<!css)$",
+            ".css$"
+        ],
+        "importOrderSeparation": true,
+        "importOrderSortSpecifiers": true,
+        "overrides": [
+            {
+                "files": "*.md",
+                "options": {
+                    "useTabs": false,
+                    "tabWidth": 4
+                }
+            },
+            {
+                "files": "*.json",
+                "options": {
+                    "useTabs": false,
+                    "tabWidth": 4
+                }
+            }
+        ]
+    }
+}

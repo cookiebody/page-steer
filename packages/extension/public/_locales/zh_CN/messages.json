@@ -1,0 +1,11 @@
+{
+    "extName": {
+        "message": "Page Steer"
+    },
+    "extDescription": {
+        "message": "AI 驱动的浏览器助手"
+    },
+    "extActionTitle": {
+        "message": "打开 Page Steer"
+    }
+}

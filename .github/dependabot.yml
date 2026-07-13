@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    labels:
+      - 'dependencies'
+    groups:
+      production-dependencies:
+        dependency-type: 'production'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+      development-dependencies:
+        dependency-type: 'development'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+      development-major:
+        dependency-type: 'development'
+        update-types:
+          - 'major'
+
+      # Production major updates are intentionally ungrouped for individual review.
+      # Security updates are also ungrouped — Dependabot prioritizes them automatically.
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    labels:
+      - 'dependencies'
+    groups:
+      github-actions:
+        patterns:
+          - '*'

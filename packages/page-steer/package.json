@@ -1,0 +1,69 @@
+{
+    "name": "page-steer",
+    "private": false,
+    "version": "0.9.0",
+    "type": "module",
+    "main": "./src/PageSteer.ts",
+    "types": "./src/PageSteer.ts",
+    "exports": {
+        ".": {
+            "types": "./src/PageSteer.ts",
+            "default": "./src/PageSteer.ts"
+        }
+    },
+    "publishConfig": {
+        "main": "./dist/esm/page-steer.js",
+        "module": "./dist/esm/page-steer.js",
+        "types": "./dist/esm/PageSteer.d.ts",
+        "exports": {
+            ".": {
+                "types": "./dist/esm/PageSteer.d.ts",
+                "import": "./dist/esm/page-steer.js",
+                "default": "./dist/esm/page-steer.js"
+            }
+        }
+    },
+    "files": [
+        "dist/"
+    ],
+    "description": "AI-Powered Browser Assistant - add intelligent automation to any webpage with a single script",
+    "keywords": [
+        "ai",
+        "automation",
+        "ui-agent",
+        "GUI-agent",
+        "browser-automation",
+        "web-agent",
+        "llm",
+        "dom-interaction",
+        "web-automation",
+        "GUI-simulation"
+    ],
+    "author": "CookieBody",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/cookiebody/PageSteer.git"
+    },
+    "homepage": "https://cookiebody.github.io/docs/page-steer/",
+    "scripts": {
+        "build": "vite build && npm run build:demo",
+        "build:demo": "vite build --config vite.iife.config.js",
+        "dev:demo": "concurrently \"vite build --config vite.iife.config.js --watch\" \"npx serve dist/iife -p 5174\"",
+        "prepublishOnly": "node ../../scripts/pre-publish.js",
+        "postpublish": "node ../../scripts/post-publish.js"
+    },
+    "dependencies": {
+        "@page-steer/core": "0.9.0",
+        "@page-steer/llms": "0.9.0",
+        "@page-steer/page-controller": "0.9.0",
+        "@page-steer/ui": "0.9.0",
+        "chalk": "^5.6.2"
+    },
+    "peerDependencies": {
+        "zod": "^3.25.0 || ^4.0.0"
+    },
+    "devDependencies": {
+        "zod": "^4.4.3"
+    }
+}

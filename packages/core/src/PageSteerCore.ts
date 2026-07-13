@@ -1,0 +1,869 @@
+/**
+ * Copyright (C) 2026 Page Steer Contributors
+ * All rights reserved.
+ */
+import { InvokeError, LLM, type Tool } from '@page-steer/llms'
+import type { BrowserState, PageController } from '@page-steer/page-controller'
+import chalk from 'chalk'
+import * as z from 'zod/v4'
+
+import type { RetryContext, SkillStore } from './SkillStore'
+import SYSTEM_PROMPT from './prompts/system_prompt.md?raw'
+import { tools } from './tools'
+import type {
+	AgentActivity,
+	AgentConfig,
+	AgentReflection,
+	AgentStatus,
+	AgentStepEvent,
+	ExecutionResult,
+	HistoricalEvent,
+	MacroToolInput,
+	MacroToolResult,
+} from './types'
+import { assert, fetchLlmsTxt, normalizeResponse, suppress, uid, waitFor } from './utils'
+
+export { tool, type PageSteerTool } from './tools'
+export type * from './types'
+
+export type PageSteerCoreConfig = AgentConfig & {
+	pageController: PageController
+	/** Optional SkillStore for auto-learning from retries */
+	skillStore?: SkillStore
+}
+
+/** Tools that mutate the DOM and should trigger post-action diff verification */
+const DOM_MUTATING_TOOLS = new Set([
+	'click_element_by_index',
+	'input_text',
+	'select_dropdown_option',
+	'scroll',
+	'scroll_horizontally',
+	'execute_javascript',
+])
+
+/** Lightweight page state snapshot for diff comparison */
+interface PageSnapshot {
+	url: string
+	title: string
+	elementCount: number
+	contentLines: Set<string>
+}
+
+/**
+ * AI agent for browser automation.
+ *
+ * @remarks
+ * ## Re-act Agent Loop
+ * - step
+ *    - observe (gather information about current environment and context)
+ *    - think (LLM calling)
+ *      - reflection (evaluate history, generate memory, short-term planning)
+ *      - action (give the action to approach the next goal)
+ *    - act (execute the action)
+ * - loop
+ *
+ * ## Event System
+ * - `statuschange` - Agent status transitions (idle → running → completed/error/stopped)
+ * - `historychange` - History events updated (persistent, part of agent memory)
+ * - `activity` - Real-time activity feedback (transient, for UI only)
+ * - `dispose` - Agent cleanup triggered
+ *
+ * ## Information Streams
+ * 1. **History Events** (`history` array)
+ *    - Persistent event stream that forms agent's memory
+ *    - Included in LLM context across steps
+ *    - Types: steps, observations, user takeovers, llm errors
+ *
+ * 2. **Activity Events** (via `activity` event)
+ *    - Transient UI feedback during task execution
+ *    - NOT included in LLM context
+ *    - Types: thinking, executing, executed, retrying, error
+ */
+export class PageSteerCore extends EventTarget {
+	readonly id = uid()
+	readonly config: PageSteerCoreConfig & { maxSteps: number }
+	readonly tools: typeof tools
+	/** PageController for DOM operations */
+	readonly pageController: PageController
+
+	task = ''
+	taskId = ''
+	/** History events */
+	history: HistoricalEvent[] = []
+	/** Whether this agent has been disposed */
+	disposed = false
+
+	/**
+	 * Called when the agent needs to ask the user questions.
+	 * If unset, the `ask_user` tool will be disabled.
+	 * Implementations should reject the promise when `signal` aborts.
+	 * @example onAskUser: (q) => window.prompt(q) || ''
+	 */
+	onAskUser?: (question: string, options?: { signal: AbortSignal }) => Promise<string>
+
+	#status: AgentStatus = 'idle'
+	#llm: LLM
+	/**
+	 * Task cancellation primitive: its signal reaches the LLM fetch, tools
+	 * (via `ctx.signal`) and async callbacks. Aborted only by `stop`/`dispose`
+	 * (during a task) or task setup, always WITHOUT a reason so `signal.reason`
+	 * stays a standard `AbortError`.
+	 */
+	#abortController = new AbortController()
+	#observations: string[] = []
+
+	/** Resolves when the current run has fully settled. Awaited by `stop()`. */
+	#running: Promise<void> = Promise.resolve()
+	#lastResult: ExecutionResult | null = null
+
+	/** internal states during a single task execution */
+	#states = {
+		/** Accumulated wait time in seconds */
+		totalWaitTime: 0,
+		/** For detecting navigation */
+		lastURL: '',
+		/** Browser state */
+		browserState: null as BrowserState | null,
+	}
+
+	#debugLog(...args: unknown[]): void {
+		if (this.config.debug) console.log(...args)
+	}
+
+	#debugGroup(label: string): void {
+		if (this.config.debug) console.group(label)
+	}
+
+	#debugGroupEnd(): void {
+		if (this.config.debug) console.groupEnd()
+	}
+
+	constructor(config: PageSteerCoreConfig) {
+		super()
+
+		this.config = { ...config, maxSteps: config.maxSteps ?? 40 }
+
+		this.#llm = new LLM(this.config)
+		this.tools = new Map(tools)
+		this.pageController = config.pageController
+
+		this.#llm.addEventListener('retry', (e) => {
+			const { attempt, maxAttempts, lastError } = (e as CustomEvent).detail
+			this.#emitActivity({ type: 'retrying', attempt, maxAttempts })
+			this.history.push({
+				type: 'error',
+				message: String(lastError),
+				rawResponse: (lastError as InvokeError).rawResponse,
+			})
+			this.history.push({
+				type: 'retry',
+				message: `LLM retry attempt ${attempt} of ${maxAttempts}`,
+				attempt,
+				maxAttempts,
+			})
+			this.#emitHistoryChange()
+		})
+
+		if (this.config.customTools) {
+			for (const [name, tool] of Object.entries(this.config.customTools)) {
+				if (tool === null) {
+					this.tools.delete(name)
+					continue
+				}
+				this.tools.set(name, tool)
+			}
+		}
+
+		if (!this.config.experimentalScriptExecutionTool) {
+			this.tools.delete('execute_javascript')
+		}
+	}
+
+	/** Get current agent status */
+	get status(): AgentStatus {
+		return this.#status
+	}
+
+	/** Result of the most recent run, or `null` before the first run completes. */
+	get lastResult(): ExecutionResult | null {
+		return this.#lastResult
+	}
+
+	/** Emit statuschange event */
+	#emitStatusChange(): void {
+		this.dispatchEvent(new Event('statuschange'))
+	}
+
+	/** Emit historychange event */
+	#emitHistoryChange(pushHistoricalEvent?: HistoricalEvent): void {
+		if (pushHistoricalEvent) this.history.push(pushHistoricalEvent)
+		this.dispatchEvent(new Event('historychange'))
+	}
+
+	/**
+	 * Emit activity event - for transient UI feedback
+	 * @param activity - Current agent activity
+	 */
+	#emitActivity(activity: AgentActivity): void {
+		this.dispatchEvent(new CustomEvent('activity', { detail: activity }))
+	}
+
+	/** Update status and emit event */
+	#setStatus(status: AgentStatus): void {
+		if (this.#status !== status) {
+			this.#status = status
+			this.#emitStatusChange()
+		}
+	}
+
+	/**
+	 * Push an observation message to the history event stream.
+	 * This will be visible in <agent_history> and remain persistent in memory across steps.
+	 * @experimental @internal
+	 * @note history change will be emitted before next step starts
+	 */
+	pushObservation(content: string): void {
+		this.#observations.push(content)
+	}
+
+	/**
+	 * Stop the current task and wait until the run has fully settled (including lifecycle hooks).
+	 * @note never await .stop() in a lifecycle hook.
+	 */
+	async stop(): Promise<void> {
+		if (this.#status !== 'running') return
+		this.#abortController.abort()
+		await this.#running
+	}
+
+	/**
+	 * external errors (pre-checks/config/hooks) will threw;
+	 * agent errors will be caught and added to history, and return a failed result
+	 */
+	async execute(task: string): Promise<ExecutionResult> {
+		// pre-checks
+		if (this.disposed) throw new Error('PageSteer has been disposed. Create a new instance.')
+		if (this.#status === 'running') throw new Error('A task is already running.')
+		if (!task) throw new Error('Task is required')
+
+		this.task = task
+		this.taskId = uid()
+
+		this.history = []
+		this.#observations = []
+		this.#states = { totalWaitTime: 0, lastURL: '', browserState: null }
+		this.#abortController = new AbortController()
+		const signal = this.#abortController.signal
+
+		let resolveRunning!: () => void
+		this.#running = new Promise<void>((r) => (resolveRunning = r))
+
+		this.#setStatus('running')
+		this.#emitHistoryChange()
+
+		// Disable ask_user tool if onAskUser is not set
+		if (!this.onAskUser) this.tools.delete('ask_user')
+
+		const onBeforeStep = this.config.onBeforeStep
+		const onAfterStep = this.config.onAfterStep
+		const onBeforeTask = this.config.onBeforeTask
+		const onAfterTask = this.config.onAfterTask
+		const stepDelay = this.config.stepDelay ?? 0.4
+		const maxSteps = this.config.maxSteps
+
+		let step = 0
+		let retryBudget = 1
+		let pendingRetryContext: { tool: string; input: any; error: string } | null = null
+		let taskResult: ExecutionResult
+		let finalStatus: AgentStatus = 'error'
+
+		await suppress(() => this.pageController.showMask())
+
+		// graceful exit
+		try {
+			await onBeforeTask?.(this)
+
+			while (true) {
+				await onBeforeStep?.(this, step)
+
+				// handle internal agent errors
+				try {
+					this.#debugGroup(`step: ${step}`)
+
+					// @note It's convenient to treat stepDelay as part of the next step.
+					// Maybe move it to a dedicated try block for better semantics?
+					if (step > 0) await waitFor(stepDelay, signal)
+
+					signal.throwIfAborted()
+
+					// observe
+
+					this.#debugLog(chalk.blue.bold('👀 Observing...'))
+
+					this.#states.browserState = await this.pageController.getBrowserState()
+					await this.#handleObservations(step)
+
+					// assemble prompts
+
+					const messages = [
+						{ role: 'system' as const, content: this.#getSystemPrompt() },
+						{ role: 'user' as const, content: await this.#assembleUserPrompt() },
+					]
+
+					const macroTool = { AgentOutput: this.#packMacroTool() }
+
+					// invoke LLM
+
+					this.#debugLog(chalk.blue.bold('🧠 Thinking...'))
+					this.#emitActivity({ type: 'thinking' })
+
+					const result = await this.#llm.invoke(messages, macroTool, signal, {
+						toolChoiceName: 'AgentOutput',
+						normalizeResponse: (res) => normalizeResponse(res, this.tools),
+					})
+
+					// assemble history
+
+					const macroResult = result.toolResult as MacroToolResult
+					const input = macroResult.input
+					const output = macroResult.output
+					const reflection: Partial<AgentReflection> = {
+						evaluation_previous_goal: input.evaluation_previous_goal,
+						memory: input.memory,
+						next_goal: input.next_goal,
+					}
+					const actionName = Object.keys(input.action)[0]
+					const action: AgentStepEvent['action'] = {
+						name: actionName,
+						input: input.action[actionName],
+						output: output,
+					}
+
+					this.#emitHistoryChange({
+						type: 'step',
+						stepIndex: step,
+						reflection,
+						action,
+						usage: result.usage,
+						rawResponse: result.rawResponse,
+						rawRequest: result.rawRequest,
+					})
+
+					if (actionName === 'done') {
+						const success = action.input?.success ?? false
+						const data = action.input?.text || 'no text provided'
+						this.#debugLog(chalk.green.bold('Task completed'), success, data)
+						taskResult = { success, data, history: this.history }
+						this.#lastResult = taskResult
+						finalStatus = 'completed'
+						break
+					}
+
+					// Action retry: if tool returned a failure, give the LLM one
+					// free retry within the same step (does not increment step count).
+					if (output.startsWith('❌') && retryBudget > 0) {
+						retryBudget--
+						pendingRetryContext = {
+							tool: actionName,
+							input: input.action[actionName],
+							error: output,
+						}
+						this.#debugLog(
+							chalk.yellow.bold('[Retry] Action failed, retrying without consuming a step')
+						)
+						this.pushObservation(
+							`[Retry] Action failed: ${output}. Retrying with fresh page state...`
+						)
+						this.#emitActivity({ type: 'retrying', attempt: 1, maxAttempts: 1 })
+						continue
+					}
+
+					// Skill learning: if this step is a successful retry, learn from it
+					if (pendingRetryContext && !output.startsWith('❌') && this.config.skillStore) {
+						const retryCtx: RetryContext = {
+							url: this.#states.browserState?.url || '',
+							title: this.#states.browserState?.title || '',
+							task: this.task,
+							failedAction: pendingRetryContext,
+							successAction: { tool: actionName, input: input.action[actionName], result: output },
+						}
+						this.config.skillStore
+							.learnFromRetry(retryCtx)
+							.then((skill) => {
+								this.#debugLog(chalk.green(`[SkillStore] Learned: "${skill.instruction}"`))
+							})
+							.catch(() => {})
+					}
+					pendingRetryContext = null
+				} catch (error: unknown) {
+					// catch block must not throw error. otherwise the error may be overridden if finally block also throws error.
+
+					const isAbortError = (error as any)?.name === 'AbortError'
+					if (!isAbortError) console.error('Task failed', error)
+					const message = isAbortError ? 'Task aborted' : String(error)
+					this.#emitActivity({ type: 'error', message: message })
+					this.#emitHistoryChange({ type: 'error', message: message, rawResponse: error })
+					taskResult = { success: false, data: message, history: this.history }
+					this.#lastResult = taskResult
+					finalStatus = isAbortError ? 'stopped' : 'error'
+					break
+				} finally {
+					// finally block runs before the break above.
+
+					this.#debugGroupEnd()
+					// @note hook may throw error.
+					// which will override the `break` above and be handled as an external error.
+					// as expected.
+					await onAfterStep?.(this, this.history)
+				}
+
+				step++
+				retryBudget = 1
+				if (step > maxSteps) {
+					const message = 'Step count exceeded maximum limit'
+					console.error(message)
+					this.#emitActivity({ type: 'error', message: message })
+					this.#emitHistoryChange({ type: 'error', message: message })
+					taskResult = { success: false, data: message, history: this.history }
+					this.#lastResult = taskResult
+					finalStatus = 'error'
+					break
+				}
+			} // while
+
+			await onAfterTask?.(this, taskResult)
+
+			return taskResult
+		} catch (error) {
+			this.#emitActivity({ type: 'error', message: String(error) })
+			finalStatus = 'error'
+			throw error
+		} finally {
+			await suppress(() => this.pageController.cleanUpHighlights())
+			await suppress(() => this.pageController.hideMask())
+			this.#abortController.abort()
+			resolveRunning()
+			this.#setStatus(finalStatus)
+		}
+	}
+
+	/**
+	 * Merge all tools into a single MacroTool with the following input:
+	 * - thinking: string
+	 * - evaluation_previous_goal: string
+	 * - memory: string
+	 * - next_goal: string
+	 * - action: { toolName: toolInput }
+	 * where action must be selected from tools defined in this.tools
+	 */
+	#packMacroTool(): Tool<MacroToolInput, MacroToolResult> {
+		const tools = this.tools
+
+		const actionSchemas = Array.from(tools.entries()).map(([toolName, tool]) => {
+			return z.object({ [toolName]: tool.inputSchema }).describe(tool.description)
+		})
+
+		const actionSchema = z.union(actionSchemas as unknown as [z.ZodType, z.ZodType, ...z.ZodType[]])
+
+		const macroToolSchema = z.object({
+			// thinking: z.string().optional(),
+			evaluation_previous_goal: z.string().optional(),
+			memory: z.string().optional(),
+			next_goal: z.string().optional(),
+			action: actionSchema,
+		})
+
+		return {
+			description: 'You MUST call this tool every step!',
+			inputSchema: macroToolSchema as z.ZodType<MacroToolInput>,
+			execute: async (input: MacroToolInput): Promise<MacroToolResult> => {
+				const signal = this.#abortController.signal
+				signal.throwIfAborted()
+
+				this.#debugLog(chalk.blue.bold('MacroTool input'), input)
+				const action = input.action
+
+				const toolName = Object.keys(action)[0]
+				const toolInput = action[toolName]
+
+				// Build reflection text, only include non-empty fields
+				const reflectionLines: string[] = []
+				if (input.evaluation_previous_goal)
+					reflectionLines.push(`✅: ${input.evaluation_previous_goal}`)
+				if (input.memory) reflectionLines.push(`💾: ${input.memory}`)
+				if (input.next_goal) reflectionLines.push(`🎯: ${input.next_goal}`)
+
+				const reflectionText = reflectionLines.length > 0 ? reflectionLines.join('\n') : ''
+
+				if (reflectionText) {
+					this.#debugLog(reflectionText)
+				}
+
+				// Find the corresponding tool
+				const tool = tools.get(toolName)
+				assert(tool, `Tool ${toolName} not found`)
+
+				this.#debugLog(chalk.blue.bold(`Executing tool: ${toolName}`), toolInput)
+
+				// Emit executing activity
+				this.#emitActivity({ type: 'executing', tool: toolName, input: toolInput })
+
+				// Snapshot page state before DOM-mutating actions
+				const isDomAction = DOM_MUTATING_TOOLS.has(toolName)
+				let snapshotBefore: PageSnapshot | null = null
+				if (isDomAction) {
+					snapshotBefore = await this.#takePageSnapshot()
+				}
+
+				const startTime = Date.now()
+
+				const result = await tool.execute.bind(this)(toolInput, { signal })
+				// Enforce abort even if the tool ignored the signal and resolved normally.
+				signal.throwIfAborted()
+
+				const duration = Date.now() - startTime
+				this.#debugLog(chalk.green.bold(`Tool (${toolName}) executed for ${duration}ms`), result)
+
+				// Post-action diff verification
+				if (isDomAction && snapshotBefore) {
+					const diffSummary = await this.#computeActionDiff(snapshotBefore, toolName)
+					if (diffSummary) {
+						this.pushObservation(diffSummary)
+					}
+				}
+
+				// Emit executed activity
+				this.#emitActivity({
+					type: 'executed',
+					tool: toolName,
+					input: toolInput,
+					output: result,
+					duration,
+				})
+
+				// counting wait time
+				if (toolName === 'wait') {
+					this.#states.totalWaitTime += toolInput?.seconds || 0
+				} else {
+					this.#states.totalWaitTime = 0
+				}
+
+				// Return structured result
+				return {
+					input,
+					output: result,
+				}
+			},
+		}
+	}
+
+	/**
+	 * Get system prompt, dynamically replace language settings based on configured language
+	 */
+	#getSystemPrompt(): string {
+		if (this.config.customSystemPrompt) {
+			return this.config.customSystemPrompt
+		}
+
+		const languageNames: Record<NonNullable<typeof this.config.language>, string> = {
+			'en-US': 'English',
+			'zh-CN': '中文',
+			'ja-JP': '日本語',
+			'fr-FR': 'Français',
+		}
+		const targetLanguage = this.config.language ? languageNames[this.config.language] : 'English'
+		const systemPrompt = SYSTEM_PROMPT.replace(
+			/Default working language: \*\*.*?\*\*/,
+			`Default working language: **${targetLanguage}**`
+		)
+
+		return systemPrompt
+	}
+
+	/**
+	 * Get instructions from config
+	 */
+	async #getInstructions(): Promise<string> {
+		const { instructions, experimentalLlmsTxt, skillStore } = this.config
+
+		const systemInstructions = instructions?.system?.trim()
+		let pageInstructions: string | undefined
+
+		const url = this.#states.browserState?.url || ''
+		const title = this.#states.browserState?.title || ''
+
+		if (instructions?.getPageInstructions && url) {
+			try {
+				pageInstructions = instructions.getPageInstructions(url)?.trim()
+			} catch (error) {
+				console.error(
+					chalk.red('[PageSteer] Failed to execute getPageInstructions callback:'),
+					error
+				)
+			}
+		}
+
+		// Inject learned skills as page instructions
+		let skillInstructions: string | undefined
+		if (skillStore && url) {
+			skillInstructions = skillStore.getInstructionsForPage(url, title)
+		}
+
+		const llmsTxt = experimentalLlmsTxt && url ? await fetchLlmsTxt(url) : undefined
+
+		if (!systemInstructions && !pageInstructions && !skillInstructions && !llmsTxt) return ''
+
+		let result = '<instructions>\n'
+
+		if (systemInstructions) {
+			result += `<system_instructions>\n${systemInstructions}\n</system_instructions>\n`
+		}
+
+		if (pageInstructions) {
+			result += `<page_instructions>\n${pageInstructions}\n</page_instructions>\n`
+		}
+
+		if (skillInstructions) {
+			result += `<learned_skills>\n${skillInstructions}\n</learned_skills>\n`
+		}
+
+		if (llmsTxt) {
+			result += `<llms_txt>\n${llmsTxt}\n</llms_txt>\n`
+		}
+
+		result += '</instructions>\n\n'
+
+		return result
+	}
+
+	/**
+	 * Generate system observations before each step
+	 * @todo loop detection
+	 * @todo console error
+	 */
+	async #handleObservations(step: number): Promise<void> {
+		// Accumulated wait time warning
+		if (this.#states.totalWaitTime >= 3) {
+			this.pushObservation(
+				`You have waited ${this.#states.totalWaitTime} seconds accumulatively. ` +
+					`DO NOT wait any longer unless you have a good reason.`
+			)
+		}
+
+		// Detect URL change
+		const currentURL = this.#states.browserState?.url || ''
+		if (currentURL !== this.#states.lastURL) {
+			this.pushObservation(`Page navigated to → ${currentURL}`)
+			this.#states.lastURL = currentURL
+			await waitFor(0.5) // wait for page to stabilize
+		}
+
+		// Remaining steps warning
+		const remaining = this.config.maxSteps - step
+		if (remaining === 5) {
+			this.pushObservation(
+				`⚠️ Only ${remaining} steps remaining. ` +
+					`Consider wrapping up or calling done with partial results.`
+			)
+		} else if (remaining === 2) {
+			this.pushObservation(
+				`⚠️ Critical: Only ${remaining} steps left! You must finish the task or call done immediately.`
+			)
+		}
+
+		// Push observations to history and emit
+		if (this.#observations.length > 0) {
+			for (const content of this.#observations) {
+				this.history.push({ type: 'observation', content })
+				this.#debugLog(chalk.cyan('Observation:'), content)
+			}
+			this.#observations = []
+			this.#emitHistoryChange()
+		}
+	}
+
+	async #assembleUserPrompt(): Promise<string> {
+		const browserState = this.#states.browserState!
+
+		let prompt = ''
+
+		// <instructions> (optional)
+
+		prompt += await this.#getInstructions()
+
+		// <agent_state>
+		//  - <user_request>
+		//  - <step_info>
+		// <agent_state>
+
+		const stepCount = this.history.filter((e) => e.type === 'step').length
+
+		prompt += '<agent_state>\n'
+		prompt += '<user_request>\n'
+		prompt += `${this.task}\n`
+		prompt += '</user_request>\n'
+		prompt += '<step_info>\n'
+		prompt += `Step ${stepCount + 1} of ${this.config.maxSteps} max possible steps\n`
+		prompt += `Current time: ${new Date().toLocaleString()}\n`
+		prompt += '</step_info>\n'
+		prompt += '</agent_state>\n\n'
+
+		// <agent_history>
+		//  - <step_N> for steps
+		//  - <sys> for observations and system messages
+
+		prompt += '<agent_history>\n'
+
+		let stepIndex = 0
+		for (const event of this.history) {
+			if (event.type === 'step') {
+				stepIndex++
+				prompt += `<step_${stepIndex}>\n`
+				prompt += `Evaluation of Previous Step: ${event.reflection.evaluation_previous_goal}\n`
+				prompt += `Memory: ${event.reflection.memory}\n`
+				prompt += `Next Goal: ${event.reflection.next_goal}\n`
+				prompt += `Action Results: ${event.action.output}\n`
+				prompt += `</step_${stepIndex}>\n`
+			} else if (event.type === 'observation') {
+				prompt += `<sys>${event.content}</sys>\n`
+			} else if (event.type === 'user_takeover') {
+				prompt += `<sys>User took over control and made changes to the page</sys>\n`
+			} else if (event.type === 'error') {
+				// Error events are mainly for panel rendering, not included in LLM context
+				// to avoid polluting the agent's reasoning with transient errors
+			}
+		}
+
+		prompt += '</agent_history>\n\n'
+
+		// <browser_state>
+
+		let pageContent = browserState.content
+		if (this.config.transformPageContent) {
+			pageContent = await this.config.transformPageContent(pageContent)
+		}
+
+		// Truncate oversized page content to prevent API request failures
+		// (many proxy/gateway services limit request body size)
+		const MAX_PAGE_CONTENT_CHARS = 80_000
+		if (pageContent.length > MAX_PAGE_CONTENT_CHARS) {
+			// Keep lines until we hit the limit, preferring interactive elements
+			const lines = pageContent.split('\n')
+			let kept = ''
+			for (const line of lines) {
+				if (kept.length + line.length + 1 > MAX_PAGE_CONTENT_CHARS) break
+				kept += line + '\n'
+			}
+			const totalLines = lines.length
+			const keptLines = kept.split('\n').length - 1
+			pageContent = kept + `\n[... ${totalLines - keptLines} more lines truncated]`
+			console.warn(
+				`[PageSteer] Page content truncated: ${totalLines} lines → ${keptLines} lines (${Math.round(pageContent.length / 1024)}KB)`
+			)
+		}
+
+		prompt += '<browser_state>\n'
+		prompt += browserState.header + '\n'
+		prompt += pageContent + '\n'
+		prompt += browserState.footer + '\n\n'
+		prompt += '</browser_state>\n\n'
+
+		return prompt
+	}
+
+	// ======= Post-Action Diff Verification =======
+
+	async #takePageSnapshot(): Promise<PageSnapshot> {
+		const browserState = this.#states.browserState
+		return {
+			url: browserState?.url || '',
+			title: browserState?.title || '',
+			elementCount:
+				browserState?.content?.split('\n').filter((l) => /^\t*\*?\[/.test(l)).length ?? 0,
+			contentLines: new Set(
+				(browserState?.content || '')
+					.split('\n')
+					.map((l) => l.trim())
+					.filter((l) => l.length > 0)
+			),
+		}
+	}
+
+	async #computeActionDiff(before: PageSnapshot, toolName: string): Promise<string | null> {
+		// Wait a bit for DOM to settle after action
+		await waitFor(0.3)
+
+		// Re-fetch page state
+		const afterState = await this.pageController.getBrowserState()
+		const afterUrl = afterState?.url || ''
+		const afterTitle = afterState?.title || ''
+
+		const afterLines = new Set(
+			(afterState?.content || '')
+				.split('\n')
+				.map((l: string) => l.trim())
+				.filter((l: string) => l.length > 0)
+		)
+
+		const parts: string[] = []
+
+		// URL changed
+		if (afterUrl !== before.url) {
+			parts.push(`Page navigated: ${before.url} → ${afterUrl}`)
+		}
+
+		// Title changed
+		if (afterTitle !== before.title && afterUrl === before.url) {
+			parts.push(`Title changed: "${afterTitle}"`)
+		}
+
+		// New elements appeared
+		const newLines: string[] = []
+		for (const line of afterLines) {
+			if (!before.contentLines.has(line) && /^\t*\*?\[/.test(line)) {
+				newLines.push(line)
+			}
+		}
+
+		// Elements disappeared
+		let disappearedCount = 0
+		for (const line of before.contentLines) {
+			if (!afterLines.has(line) && /^\t*\*?\[/.test(line)) {
+				disappearedCount++
+			}
+		}
+
+		if (newLines.length > 0) {
+			const preview = newLines.slice(0, 5).join(', ')
+			const suffix = newLines.length > 5 ? ` (+${newLines.length - 5} more)` : ''
+			parts.push(`${newLines.length} new interactive elements appeared: ${preview}${suffix}`)
+		}
+
+		if (disappearedCount > 0) {
+			parts.push(`${disappearedCount} elements disappeared`)
+		}
+
+		// No change detected
+		if (parts.length === 0 && toolName !== 'scroll' && toolName !== 'wait') {
+			parts.push(
+				`⚠️ No visible page change detected after ${toolName}. The action may not have taken effect.`
+			)
+		}
+
+		return parts.length > 0 ? `[Post-action] ${parts.join('. ')}` : null
+	}
+
+	dispose() {
+		this.#debugLog('Disposing PageSteer...')
+		this.disposed = true
+		this.pageController.dispose()
+		// this.history = []
+		this.#abortController.abort()
+
+		// Emit dispose event for UI cleanup
+		this.dispatchEvent(new Event('dispose'))
+
+		this.config.onDispose?.(this)
+	}
+}

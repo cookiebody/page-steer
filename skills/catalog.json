@@ -1,0 +1,79 @@
+[
+    {
+        "meta": {
+            "id": "google-trends",
+            "name": "Google Trends",
+            "version": "1.0.0",
+            "description": "Browse trending searches, explore keyword interest over time, compare terms, and discover related queries on Google Trends.",
+            "author": "page-steer",
+            "icon": "📈",
+            "source": "community",
+            "matchPatterns": ["^https?://trends\\.google\\.com"],
+            "tags": ["google", "trends", "seo", "research", "keywords"],
+            "actions": [
+                {
+                    "name": "get_trending_now",
+                    "description": "Get currently trending searches",
+                    "params": {}
+                },
+                {
+                    "name": "get_trending_detail",
+                    "description": "Expand a trending item for details",
+                    "params": {
+                        "index": { "type": "number", "description": "Item index", "required": true }
+                    }
+                },
+                {
+                    "name": "search_explore",
+                    "description": "Explore a keyword's interest over time",
+                    "params": {
+                        "query": { "type": "string", "description": "Keyword", "required": true }
+                    }
+                },
+                {
+                    "name": "compare_terms",
+                    "description": "Compare up to 5 terms",
+                    "params": {
+                        "terms": {
+                            "type": "string",
+                            "description": "Comma-separated terms",
+                            "required": true
+                        }
+                    }
+                },
+                {
+                    "name": "get_interest_data",
+                    "description": "Extract interest and regional data",
+                    "params": {}
+                },
+                {
+                    "name": "get_related_queries",
+                    "description": "Get related queries",
+                    "params": {}
+                },
+                { "name": "get_related_topics", "description": "Get related topics", "params": {} },
+                {
+                    "name": "set_region",
+                    "description": "Change region",
+                    "params": {
+                        "geo": { "type": "string", "description": "Region code", "required": true }
+                    }
+                },
+                {
+                    "name": "set_time_range",
+                    "description": "Change time range",
+                    "params": {
+                        "range": {
+                            "type": "string",
+                            "description": "Time range code",
+                            "required": true
+                        }
+                    }
+                }
+            ]
+        },
+        "sourceUrl": "https://raw.githubusercontent.com/cookiebody/PageSteer/main/skills/skills/google-trends.json",
+        "downloads": 0,
+        "rating": 0
+    }
+]

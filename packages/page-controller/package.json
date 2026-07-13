@@ -1,0 +1,55 @@
+{
+    "name": "@page-steer/page-controller",
+    "version": "0.9.0",
+    "type": "module",
+    "main": "./src/PageController.ts",
+    "types": "./src/PageController.ts",
+    "exports": {
+        ".": {
+            "types": "./src/PageController.ts",
+            "default": "./src/PageController.ts"
+        }
+    },
+    "publishConfig": {
+        "main": "./dist/lib/page-controller.js",
+        "module": "./dist/lib/page-controller.js",
+        "types": "./dist/lib/PageController.d.ts",
+        "exports": {
+            ".": {
+                "types": "./dist/lib/PageController.d.ts",
+                "import": "./dist/lib/page-controller.js",
+                "default": "./dist/lib/page-controller.js"
+            }
+        }
+    },
+    "files": [
+        "dist/"
+    ],
+    "description": "Page controller for page-steer - DOM operations and element interactions",
+    "keywords": [
+        "page-steer",
+        "dom",
+        "browser-automation",
+        "web-automation"
+    ],
+    "author": "CookieBody",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/cookiebody/PageSteer.git",
+        "directory": "packages/page-controller"
+    },
+    "homepage": "https://cookiebody.github.io/docs/page-steer/",
+    "scripts": {
+        "build": "vite build",
+        "test": "vitest run",
+        "prepublishOnly": "node ../../scripts/pre-publish.js",
+        "postpublish": "node ../../scripts/post-publish.js"
+    },
+    "dependencies": {
+        "ai-motion": "^0.4.8"
+    },
+    "devDependencies": {
+        "happy-dom": "^20.10.2"
+    }
+}

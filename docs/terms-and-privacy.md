@@ -18,7 +18,7 @@ The project is open source under the [MIT License](https://github.com/cookiebody
 
 ## 2. Testing API and Demo Disclaimer & Terms of Use
 
-To facilitate easy testing and technical evaluation, we provide a free testing LLM API. This API is used in the project homepage's live demo, the pre-built demo CDN bundles, and the browser extension's default configuration. Users may also use it independently for their own technical evaluation of the software.
+To facilitate easy testing and technical evaluation, we may provide a free testing LLM API. This API can be used in the project homepage's live demo and the pre-built demo CDN bundles. **The browser extension does not ship with any pre-configured API** — on first use you must supply your own LLM endpoint and key (BYOK). Users may also use the testing API independently for their own technical evaluation of the software.
 
 This free testing API is provided **strictly for technical evaluation and R&D purposes only**. It must not be used in any production environment. By using this API, you agree to the following terms:
 
@@ -59,7 +59,7 @@ are sent to the LLM API endpoint configured in **your settings**.
 
 **If you configure a third-party LLM provider** (e.g., OpenAI, Anthropic, or others), data is sent directly to that provider. Their privacy policies apply.
 
-**If you use the testing API**, the terms in [Section 2](#2-testing-api-and-demo-disclaimer--terms-of-use) apply. By using the extension with the default testing API, you agree to those terms.
+**If you choose to configure the testing API** yourself, the terms in [Section 2](#2-testing-api-and-demo-disclaimer--terms-of-use) apply. The extension does not use it unless you explicitly enter it.
 
 ### Data Storage
 

@@ -6,3 +6,6 @@ packages/extension/.wxt
 
 # Vendored
 **/components/ui
+
+# Local AI client config
+.mcp.json

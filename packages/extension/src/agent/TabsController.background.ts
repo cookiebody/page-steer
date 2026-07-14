@@ -17,11 +17,22 @@ export function handleTabControlMessage(
 	switch (action as TabAction) {
 		case 'get_active_tab': {
 			debug('get_active_tab')
+			// The sidepanel runs in its own extension context, so `{ active: true }`
+			// alone matches the active tab of EVERY open window and `tabs[0]` is
+			// arbitrary (ordered by window age, not focus) — frequently a stale/other
+			// window's tab. Scope to the window the user is actually looking at, matching
+			// findActivePageTab() in background.ts and the UI query in App.tsx. Fall back
+			// to a plain query only if the focused window exposes no active tab.
 			chrome.tabs
-				.query({ active: true })
-				.then((tabs) => {
-					debug('get_active_tab: success', tabs)
-					sendResponse({ success: true, tab: tabs[0] })
+				.query({ active: true, lastFocusedWindow: true })
+				.then(async (tabs) => {
+					let tab = tabs[0]
+					if (!tab) {
+						const fallback = await chrome.tabs.query({ active: true, currentWindow: true })
+						tab = fallback[0]
+					}
+					debug('get_active_tab: success', tab)
+					sendResponse({ success: true, tab })
 				})
 				.catch((error) => {
 					sendResponse({ error: error instanceof Error ? error.message : String(error) })

@@ -6,7 +6,6 @@ on:
       - 'v*'
 
 permissions:
-  id-token: write # Required for OIDC
   contents: read
 
 jobs:
@@ -32,6 +31,8 @@ jobs:
         run: npm run build:libs
 
       - name: Publish all public packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           if [[ "$VERSION" == *"-"* ]]; then

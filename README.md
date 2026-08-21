@@ -1,3 +1,5 @@
+
+
 # Page Steer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-auto.svg)](https://opensource.org/licenses/MIT) [![TypeScript](https://img.shields.io/badge/%3C%2F%3E-TypeScript-%230074c1.svg)](http://www.typescriptlang.org/) [![GitHub stars](https://img.shields.io/github/stars/cookiebody/page-steer.svg)](https://github.com/cookiebody/PageSteer)
@@ -110,7 +112,7 @@ Skills target stable selectors (React `data-testid`, `aria-label`) for reliable,
 
 ```bash
 git clone https://github.com/cookiebody/PageSteer.git
-cd page-steer
+cd PageSteer
 npm install
 npm run build:ext
 ```
